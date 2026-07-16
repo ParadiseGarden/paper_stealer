@@ -2848,7 +2848,7 @@ class MinesweeperGame {
         this._focusedCell = null;       // 当前聚焦格子 {r, c} | null
         this._longPressTimer = null;    // 长按计时器 ID
         this._longPressFired = false;   // 长按是否已触发
-        this._lastLongPressTime = 0;    // 最近一次长按触发时间戳（防 contextmenu 双重触发）
+        this._lastLongPress = { r: null, c: null, time: 0 }; // 单格防抖
         this._touchStartPos = null;     // 触控起始坐标 {x, y}
         this._touchMoved = false;       // 触控是否发生显著滑动
         this._suppressNextClick = false;// 阻止下一次 click 事件（防穿透）
@@ -4229,6 +4229,7 @@ class MinesweeperGame {
         this._touchStartPos = null;
         this._touchMoved = false;
         this._suppressNextClick = false;
+        this._lastLongPress = { r: null, c: null, time: 0 };
     }
 
     /** 启动长按计时器（450ms 后自动插旗/取消插旗） */
@@ -4238,7 +4239,10 @@ class MinesweeperGame {
         this._longPressTimer = setTimeout(() => {
             this._longPressFired = true;
             this._longPressTimer = null;
-            this._lastLongPressTime = Date.now();  // 记录时间戳，防 contextmenu 双重触发
+            // 单格防抖：同一格 600ms 内已处理则跳过
+            if (this._lastLongPress.r === r && this._lastLongPress.c === c
+                && Date.now() - this._lastLongPress.time < 600) return;
+            this._lastLongPress = { r, c, time: Date.now() };
             // 对所有未翻开的格子（含已插旗）均可切换锁状态
             if (!this.revealed[r][c] && this.gameState !== 'won' && this.gameState !== 'lost') {
                 this._toggleFlag(r, c);
@@ -4404,20 +4408,22 @@ class MinesweeperGame {
             e.preventDefault();
             if (this.gameState === 'won' || this.gameState === 'lost') return;
 
-            // 若 600ms 内长按计时器已触发过插旗，跳过本次 contextmenu 避免双重触发
-            if (this._lastLongPressTime && Date.now() - this._lastLongPressTime < 600) {
-                return;
-            }
-
             const cell = e.target.closest('.cell');
             if (!cell) return;
             const r = parseInt(cell.dataset.row);
             const c = parseInt(cell.dataset.col);
 
+            // 单格防抖：同一格 600ms 内长按计时器已处理过，跳过
+            if (this._lastLongPress.r === r && this._lastLongPress.c === c
+                && Date.now() - this._lastLongPress.time < 600) {
+                return;
+            }
+
             if (this.firstClick && !this.revealed[r][c] && !this.flagged[r][c]) {
                 // Allow flagging before first click
             }
 
+            this._lastLongPress = { r, c, time: Date.now() };
             this._toggleFlag(r, c);
         });
 
