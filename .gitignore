@@ -1,20 +1,10 @@
-# 忽略所有自动生成的 Python 缓存
-__pycache__/
-*.pyc
-
-# 忽略前端开发那头巨兽（Node 依赖包）
-node_modules/
-
-# 忽略打包生成的部署文件夹
-dist/
-build/
-
-# 忽略本地的环境变量配置文件（保护你的 API Key 安全！）
-.env
-config.local.json
-
-# 忽略操作系统自带的临时文件
 .DS_Store
 Thumbs.db
 *.log
-.vercel
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
