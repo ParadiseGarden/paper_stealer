@@ -33,6 +33,50 @@ body {
     /* 阻止页面级橡皮筋滚动 */
 }
 
+/* 镜头拉近动画期间锁定视口，防止玩家移动画面 */
+body.no-scroll,
+html.no-scroll {
+    overflow: hidden;
+    /* 不用 position:fixed —— 会导致布局跳位，打断窗户点击 */
+}
+
+/* ============================================================
+   Loading Screen — 加载页面
+   ============================================================ */
+#loading-screen {
+    position: fixed; inset: 0; z-index: 10000;
+    background: #2c3e50;
+    display: flex; align-items: center; justify-content: center;
+}
+.loading-inner {
+    text-align: center; color: #ecf0f1;
+    max-width: 320px; padding: 20px;
+}
+.loading-title { font-size: 28px; margin-bottom: 4px; }
+.loading-subtitle { font-size: 14px; opacity: 0.6; margin-bottom: 24px; }
+.progress-bar-track {
+    width: 100%; height: 8px;
+    background: rgba(255,255,255,0.15); border-radius: 4px;
+    overflow: hidden; margin-bottom: 16px;
+}
+.progress-bar-fill {
+    height: 100%; width: 0%;
+    background: linear-gradient(90deg, #3498db, #2ecc71);
+    border-radius: 4px; transition: width 0.3s ease;
+}
+.load-hint { font-size: 12px; opacity: 0.5; margin-bottom: 20px; }
+#enter-game-btn {
+    padding: 12px 48px; font-size: 18px;
+    border: none; border-radius: 8px;
+    background: #e74c3c; color: white; cursor: pointer;
+    animation: enter-pulse 2s infinite;
+}
+#enter-game-btn:hover { background: #c0392b; }
+@keyframes enter-pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+}
+
 /* 游戏页暗色遮罩——档案室内部黑暗环境 */
 #game-dark-bg {
     display: none;
@@ -2033,6 +2077,21 @@ body.device-touch #footer-hint {
 <body>
 
 <!-- ============================================================
+     Loading Screen — 加载页面
+     ============================================================ -->
+<div id="loading-screen">
+    <div class="loading-inner">
+        <h1 class="loading-title">📦 偷卷模拟器</h1>
+        <p class="loading-subtitle">PaperStealer</p>
+        <div class="progress-bar-track">
+            <div class="progress-bar-fill" id="load-progress"></div>
+        </div>
+        <p class="load-hint" id="load-hint">首次加载可能较慢，请耐心等待…</p>
+        <button id="enter-game-btn" style="display:none;">⚡ 进入游戏</button>
+    </div>
+</div>
+
+<!-- ============================================================
      Start Page — 首页
      ============================================================ -->
 <div id="start-page">
@@ -2355,14 +2414,15 @@ const USE_CUSTOM_AUDIO  = true;   // 改为 true 以使用自定义音效
 // ---- 图片预加载结果（启动时自动检测哪些图片真实存在）---------------
 const IMAGE_LOADED = {};
 
-async function preloadImages() {
+async function preloadImages(onProgress) {
     if (!USE_CUSTOM_IMAGES) return;
     const entries = Object.entries(IMAGE_ASSETS);
     const results = await Promise.all(entries.map(([key, path]) => {
         return new Promise((resolve) => {
             const img = new Image();
-            img.onload  = () => resolve({ key, ok: true });
-            img.onerror = () => resolve({ key, ok: false });
+            const done = (ok) => { if (onProgress) onProgress(); resolve({ key, ok }); };
+            img.onload  = () => done(true);
+            img.onerror = () => done(false);
             img.src = path;
         });
     }));
@@ -2509,12 +2569,15 @@ const CABINET_CONFIG = {
    ============================================================ */
 class AudioManager {
     constructor() {
+        // sounds: SFX key → AudioBuffer (Web Audio API 解码后的 buffer)
         this.sounds = {};
         this.enabled = true;       // SFX 开关
         this.bgmEnabled = true;    // BGM 开关
-        this.bgmAudio = null;      // BGM 独立 Audio 元素（循环）
-        this.bgmVolume = 0.8;      // BGM 默认音量
-        this.sfxVolume = 0.8;      // SFX 默认音量
+        this.bgmAudio = null;      // BGM HTMLAudioElement（独占系统音频通道，锁屏/后台可播）
+        this.bgmVolume = 0.8;
+        this.sfxVolume = 0.8;
+        this.audioCtx = null;     // AudioContext（SFX 混音，不抢音频焦点）
+        this.gainNode = null;     // SFX 总音量 GainNode
         this._init();
     }
 
@@ -2527,6 +2590,7 @@ class AudioManager {
     /** 设置 SFX 音量 (0-1) */
     setSFXVolume(v) {
         this.sfxVolume = Math.max(0, Math.min(1, v));
+        if (this.gainNode) this.gainNode.gain.value = this.sfxVolume;
     }
 
     _init() {
@@ -2536,60 +2600,95 @@ class AudioManager {
         });
     }
 
-    /** 预加载所有音效文件。如果加载失败则静默降级 */
-    async preload() {
-        if (!USE_CUSTOM_AUDIO) return;
-
-        const promises = Object.entries(AUDIO_ASSETS).map(([key, path]) => {
-            return new Promise((resolve) => {
-                const audio = new Audio();
-                audio.preload = 'auto';
-                audio.src = path;
-                let resolved = false;
-                const done = () => { if (!resolved) { resolved = true; resolve(); } };
-                // 加载足够数据即可播放（夸克/Webkit 优先用 loadedmetadata）
-                audio.addEventListener('loadedmetadata', () => {
-                    this.sounds[key] = audio;
-                    if (key === 'bgm') { audio.loop = true; audio.volume = this.bgmVolume; this.bgmAudio = audio; }
-                    done();
-                }, { once: true });
-                audio.addEventListener('canplaythrough', () => {
-                    this.sounds[key] = audio;
-                    if (key === 'bgm') { audio.loop = true; audio.volume = this.bgmVolume; this.bgmAudio = audio; }
-                    done();
-                }, { once: true });
-                // 加载失败：保留 Audio 对象（解锁时仍有播放机会），不设 null
-                audio.addEventListener('error', () => {
-                    console.warn(`[AudioManager] 无法加载音效: ${path}，保留实例供解锁重试`);
-                    this.sounds[key] = audio;
-                    done();
-                }, { once: true });
-                // 超时保护（3秒后强制入库）
-                setTimeout(() => {
-                    if (!this.sounds[key]) this.sounds[key] = audio;
-                    done();
-                }, 3000);
-                audio.load();
-            });
-        });
-
-        await Promise.all(promises);
-        console.log('[AudioManager] 音效预加载完成');
+    /** 创建 AudioContext（仅创建，不 resume；resume 在 unlockAll 用户手势内做） */
+    _ensureAudioContext() {
+        if (!this.audioCtx) {
+            const Ctor = window.AudioContext || window.webkitAudioContext;
+            this.audioCtx = new Ctor();
+            this.gainNode = this.audioCtx.createGain();
+            this.gainNode.gain.value = this.sfxVolume;
+            this.gainNode.connect(this.audioCtx.destination);
+        }
     }
 
-    /** 播放指定音效 */
+    /** 判断 HTMLAudioElement 是否已缓存可播放数据 */
+    _isLoaded(audio) {
+        return audio.readyState >= 4; // HAVE_ENOUGH_DATA
+    }
+
+    /**
+     * 预加载所有音频。
+     * - BGM: 单实例 HTMLAudioElement，走浏览器原生解码（支持后台播放）
+     * - SFX: fetch → decodeAudioData → AudioBuffer（走 AudioContext 混音）
+     */
+    async preload(onProgress) {
+        if (!USE_CUSTOM_AUDIO) return;
+
+        // 提前创建 AudioContext（仅创建，resume 留到 unlockAll 用户手势时）
+        this._ensureAudioContext();
+
+        const bgmPath = AUDIO_ASSETS['bgm'];
+        const sfxEntries = Object.entries(AUDIO_ASSETS).filter(([key]) => key !== 'bgm');
+        const report = () => { if (onProgress) onProgress(); };
+
+        // 1) BGM: HTMLAudioElement 单实例
+        const bgmPromise = new Promise((resolve) => {
+            const audio = new Audio();
+            audio.preload = 'auto';
+            audio.src = bgmPath;
+            audio.loop = true;
+            audio.volume = this.bgmVolume;
+            this.bgmAudio = audio;
+            let resolved = false;
+            const done = () => { if (!resolved) { resolved = true; report(); resolve(); } };
+            audio.addEventListener('loadedmetadata', done, { once: true });
+            audio.addEventListener('canplaythrough', done, { once: true });
+            audio.addEventListener('error', () => {
+                console.warn('[AudioManager] BGM 加载失败，保留实例供解锁重试');
+                done();
+            }, { once: true });
+            setTimeout(() => { if (!resolved) done(); }, 3000);
+            audio.load();
+        });
+
+        // 2) SFX: fetch → AudioBuffer（不占用独立音频通道，不会打断 BGM）
+        const sfxPromises = sfxEntries.map(([key, path]) => {
+            return fetch(path)
+                .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.arrayBuffer(); })
+                .then(buf => this.audioCtx.decodeAudioData(buf))
+                .then(audioBuffer => { this.sounds[key] = audioBuffer; })
+                .catch(err => {
+                    console.warn(`[AudioManager] SFX "${key}" 预加载失败:`, err.message);
+                    this.sounds[key] = null;
+                })
+                .finally(() => { report(); });
+        });
+
+        await Promise.all([bgmPromise, ...sfxPromises]);
+        console.log('[AudioManager] 音频预加载完成 (BGM: HTMLAudio / SFX: AudioBuffer)');
+    }
+
+    /**
+     * 播放 SFX (Web Audio API)。
+     * 通过 AudioContext 混音输出，不与 BGM 的 HTMLAudioElement 抢系统音频焦点。
+     */
     play(key) {
         if (!this.enabled) return;
         if (!USE_CUSTOM_AUDIO) return;
+        if (!this.audioCtx || !this.gainNode) return;
 
-        const audio = this.sounds[key];
-        if (!audio) return;
+        const buffer = this.sounds[key];
+        if (!buffer) return;
 
-        const clone = audio.cloneNode();
-        clone.volume = this.sfxVolume;
-        clone.play().catch(err => {
-            console.debug(`[AudioManager] 播放 "${key}" 被阻止:`, err.message);
-        });
+        // AudioContext 可能被浏览器暂停（iOS 后台 / 长时间无交互）
+        if (this.audioCtx.state === 'suspended') {
+            this.audioCtx.resume();
+        }
+
+        const source = this.audioCtx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(this.gainNode);
+        source.start(0);
     }
 
     /** 开始/恢复循环 BGM */
@@ -2628,29 +2727,31 @@ class AudioManager {
         return this.bgmEnabled;
     }
 
-    /** iOS 音频池批量解锁：必须在用户手势内调用 */
-    unlockAll() {
-        const allAudio = Object.values(this.sounds).filter(Boolean);
-        allAudio.forEach(audio => {
-            audio.volume = 0;
-            const p = audio.play();
-            if (p !== undefined) {
-                p.then(() => {
-                    audio.pause();
-                    audio.currentTime = 0;
-                    audio.volume = this.sfxVolume;
-                }).catch(() => {});
-            }
-        });
+    /**
+     * 解锁音频（必须在用户手势内调用一次）。
+     * SFX: resume AudioContext（iOS 手势前处于 suspended）。
+     * BGM: 静音 play → 不暂停 → 直接拉高音量。
+     *      不 pause 就不会浪费手势配额，一次手势一气呵成。
+     */
+    async unlockAll() {
+        this._ensureAudioContext();
+
+        // ★ 核心：在用户手势内 resume AudioContext（仅此处做，不在 preload 做）
+        if (this.audioCtx) {
+            try { await this.audioCtx.resume(); } catch (e) { /* 静默 */ }
+        }
+
+        // BGM: 不暂停，直接从静音过渡到正常音量（一个手势一气呵成）
         if (this.bgmAudio) {
+            if (!this._isLoaded(this.bgmAudio)) {
+                this.bgmAudio.load();
+            }
             this.bgmAudio.volume = 0;
-            const p = this.bgmAudio.play();
-            if (p !== undefined) {
-                p.then(() => {
-                    this.bgmAudio.pause();
-                    this.bgmAudio.currentTime = 0;
-                    this.bgmAudio.volume = this.bgmVolume;
-                }).catch(() => {});
+            try {
+                await this.bgmAudio.play();
+                this.bgmAudio.volume = this.bgmVolume;
+            } catch (e) {
+                console.debug('[AudioManager] BGM 解锁被阻止:', e.message);
             }
         }
     }
@@ -3374,6 +3475,7 @@ class MinesweeperGame {
             treasuresCollected: this.treasuresCollected,
             triggerMine: this.triggerMine ? { ...this.triggerMine } : null,
             gameState: this.gameState,
+            timerValue: this.timerValue,  // 保存计时，护航回退后继续走
         };
     }
     _restoreSnapshot() {
@@ -3393,6 +3495,11 @@ class MinesweeperGame {
         this._setMineAttrs();
         this._updateMineCounter();
         this._updateBackpack();
+        // 恢复计时（护航回退后续走，不从零开始）
+        if (typeof s.timerValue === 'number') {
+            this.timerValue = s.timerValue;
+            this._updateTimer();
+        }
         this.snapshot = null;
     }
 
@@ -3953,6 +4060,16 @@ class MinesweeperGame {
         const personImg   = document.getElementById('door-person');
         const personEmo   = document.getElementById('door-person-emoji');
 
+        // 锁定视口：动画期间禁止滚动，防止玩家拖拽导致窗户偏离画面
+        document.documentElement.classList.add('no-scroll');
+        document.body.classList.add('no-scroll');
+        // touchmove 兜底（iOS Safari overflow:hidden 不完全生效）
+        const _onTouchMove = (ev) => { ev.preventDefault(); };
+        document.addEventListener('touchmove', _onTouchMove, { passive: false });
+        // 禁止窗户点击（动画期间不应切换人物素材）
+        doorWindow.style.pointerEvents = 'none';
+        document.addEventListener('touchmove', _onTouchMove, { passive: false });
+
         // 计算窗户相对于屏幕四边的空间
         const winRect   = doorWindow.getBoundingClientRect();
         const pageRect  = zoomTarget.getBoundingClientRect();
@@ -4013,6 +4130,11 @@ class MinesweeperGame {
                 personEmo.style.display = '';
                 personEmo.textContent = '👤';
                 personImg.style.animation = '';
+                // 解锁视口 + 恢复窗户点击
+                document.documentElement.classList.remove('no-scroll');
+                document.body.classList.remove('no-scroll');
+                document.removeEventListener('touchmove', _onTouchMove);
+                doorWindow.style.pointerEvents = '';
                 callback();
             }, 2200);
         }, 1800);
@@ -4190,8 +4312,11 @@ class MinesweeperGame {
        ========================================================= */
     _startTimer() {
         if (this.timerInterval) return;
-        this.timerValue = 0;
-        this._updateTimer();
+        // 护航模式回退时 _restoreSnapshot() 已恢复 timerValue，
+        // 此处仅在首次开始时归零；若已有值则续上
+        if (this.timerValue === 0) {
+            this._updateTimer();
+        }
         this.timerInterval = setInterval(() => {
             this.timerValue++;
             if (this.timerValue > 999) this.timerValue = 999;
@@ -5343,19 +5468,45 @@ window.__ach = {
    BOOTSTRAP
    ============================================================ */
 (async function main() {
-    // 先预加载所有图片，标记哪些真实存在
-    await preloadImages();
+    // ---- 加载进度跟踪 ------------------------------------------------
+    const imgCount   = Object.keys(IMAGE_ASSETS).length;
+    const audioCount = Object.keys(AUDIO_ASSETS).length;
+    const totalAssets = imgCount + audioCount;
+    let loadedCount = 0;
+    const progressEl = document.getElementById('load-progress');
+    const loadHintEl = document.getElementById('load-hint');
+    const enterBtn   = document.getElementById('enter-game-btn');
+    const loadingScreen = document.getElementById('loading-screen');
 
-    const audioManager = new AudioManager();
-    await audioManager.preload();
-
-    // 浏览器自动播放策略：首次用户交互时批量解锁音频池 + 恢复 BGM
-    document.addEventListener('click', () => {
-        audioManager.unlockAll();
-        if (audioManager.bgmEnabled && audioManager.bgmAudio) {
-            audioManager.startBGM();
+    const tickProgress = () => {
+        loadedCount++;
+        const pct = Math.min(100, Math.round(loadedCount / totalAssets * 100));
+        progressEl.style.width = pct + '%';
+        if (loadedCount >= totalAssets) {
+            progressEl.style.width = '100%';
+            loadHintEl.textContent = '资源加载完成，点击下方按钮进入游戏';
+            enterBtn.style.display = '';
         }
+    };
+
+    // ---- 并行预加载图片 + 音频 ---------------------------------------
+    const audioManager = new AudioManager();
+    await Promise.all([
+        preloadImages(tickProgress),
+        audioManager.preload(tickProgress),
+    ]);
+
+    // ---- 进入按钮：用户点击 → 隐藏加载页 + 解锁音频 ------------------
+    enterBtn.addEventListener('click', async () => {
+        loadingScreen.style.opacity = '0';
+        loadingScreen.style.transition = 'opacity 0.4s';
+        setTimeout(() => { loadingScreen.style.display = 'none'; }, 400);
+        await audioManager.unlockAll();
     }, { once: true });
+
+    // 兜底：若玩家以其他方式触发手势，也解锁音频（touchstart/click）
+    document.addEventListener('touchstart', async () => { await audioManager.unlockAll(); }, { once: true });
+    document.addEventListener('click',      async () => { await audioManager.unlockAll(); }, { once: true });
 
     // 设置首页门和探头人物
     setupDoor();
