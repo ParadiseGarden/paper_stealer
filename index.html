@@ -839,13 +839,23 @@ body {
     width: 100%;
     height: auto;
     z-index: 1;
+    -webkit-animation: person-peek 3.8s ease-in-out infinite;
     animation: person-peek 3.8s ease-in-out infinite;
+    -webkit-transform-origin: bottom center;
     transform-origin: bottom center;
 }
 /* 炸弹探头→缩回→空窗 */
 .bomb-reveal #door-person,
 .bomb-reveal #door-person-emoji {
+    -webkit-animation: bomb-peek 1.6s ease-in-out forwards !important;
     animation: bomb-peek 1.6s ease-in-out forwards !important;
+}
+@-webkit-keyframes bomb-peek {
+    0%   { -webkit-transform: translateY(100%); transform: translateY(100%); }
+    30%  { -webkit-transform: translateY(12%);  transform: translateY(12%); }
+    50%  { -webkit-transform: translateY(12%);  transform: translateY(12%); }
+    70%  { -webkit-transform: translateY(20%);  transform: translateY(20%); }
+    100% { -webkit-transform: translateY(100%); transform: translateY(100%); }
 }
 @keyframes bomb-peek {
     0%   { transform: translateY(100%); }
@@ -859,14 +869,27 @@ body {
     font-size: 44px;
     text-align: center;
     line-height: 130px;
+    -webkit-animation: person-peek-emoji 3.8s ease-in-out infinite;
     animation: person-peek-emoji 3.8s ease-in-out infinite;
 }
 
+@-webkit-keyframes person-peek {
+    0%, 100% { -webkit-transform: translateY(62%); transform: translateY(62%); }
+    25%      { -webkit-transform: translateY(15%); transform: translateY(15%); }
+    55%      { -webkit-transform: translateY(55%); transform: translateY(55%); }
+    75%      { -webkit-transform: translateY(20%); transform: translateY(20%); }
+}
 @keyframes person-peek {
     0%, 100% { transform: translateY(62%); }
     25%      { transform: translateY(15%); }
     55%      { transform: translateY(55%); }
     75%      { transform: translateY(20%); }
+}
+@-webkit-keyframes person-peek-emoji {
+    0%, 100% { margin-top: 65px; }
+    25%      { margin-top: 15px; }
+    55%      { margin-top: 55px; }
+    75%      { margin-top: 20px; }
 }
 @keyframes person-peek-emoji {
     0%, 100% { margin-top: 65px; }
@@ -876,6 +899,16 @@ body {
 }
 
 /* 彩蛋震屏 */
+@-webkit-keyframes egg-shake {
+    0%, 100% { -webkit-transform: translateX(0); transform: translateX(0); }
+    10%      { -webkit-transform: translateX(-6px); transform: translateX(-6px); }
+    20%      { -webkit-transform: translateX(6px); transform: translateX(6px); }
+    30%      { -webkit-transform: translateX(-4px); transform: translateX(-4px); }
+    40%      { -webkit-transform: translateX(4px); transform: translateX(4px); }
+    50%      { -webkit-transform: translateX(-2px); transform: translateX(-2px); }
+    60%      { -webkit-transform: translateX(2px); transform: translateX(2px); }
+    70%, 100% { -webkit-transform: translateX(0); transform: translateX(0); }
+}
 @keyframes egg-shake {
     0%, 100% { transform: translateX(0); }
     10%      { transform: translateX(-6px); }
@@ -2512,29 +2545,29 @@ class AudioManager {
                 const audio = new Audio();
                 audio.preload = 'auto';
                 audio.src = path;
-                // 加载成功
+                let resolved = false;
+                const done = () => { if (!resolved) { resolved = true; resolve(); } };
+                // 加载足够数据即可播放（夸克/Webkit 优先用 loadedmetadata）
+                audio.addEventListener('loadedmetadata', () => {
+                    this.sounds[key] = audio;
+                    if (key === 'bgm') { audio.loop = true; audio.volume = this.bgmVolume; this.bgmAudio = audio; }
+                    done();
+                }, { once: true });
                 audio.addEventListener('canplaythrough', () => {
                     this.sounds[key] = audio;
-                    // BGM 设置循环
-                    if (key === 'bgm') {
-                        audio.loop = true;
-                        audio.volume = this.bgmVolume;
-                        this.bgmAudio = audio;
-                    }
-                    resolve();
+                    if (key === 'bgm') { audio.loop = true; audio.volume = this.bgmVolume; this.bgmAudio = audio; }
+                    done();
                 }, { once: true });
-                // 加载失败，静默降级
+                // 加载失败：保留 Audio 对象（解锁时仍有播放机会），不设 null
                 audio.addEventListener('error', () => {
-                    console.warn(`[AudioManager] 无法加载音效: ${path}，已静默降级`);
-                    this.sounds[key] = null;
-                    resolve();
+                    console.warn(`[AudioManager] 无法加载音效: ${path}，保留实例供解锁重试`);
+                    this.sounds[key] = audio;
+                    done();
                 }, { once: true });
-                // 超时保护（3秒后放弃）
+                // 超时保护（3秒后强制入库）
                 setTimeout(() => {
-                    if (this.sounds[key] === null) {
-                        // 尚未确定状态，放弃等待
-                    }
-                    resolve();
+                    if (!this.sounds[key]) this.sounds[key] = audio;
+                    done();
                 }, 3000);
                 audio.load();
             });
@@ -2593,6 +2626,33 @@ class AudioManager {
             this.stopBGM();
         }
         return this.bgmEnabled;
+    }
+
+    /** iOS 音频池批量解锁：必须在用户手势内调用 */
+    unlockAll() {
+        const allAudio = Object.values(this.sounds).filter(Boolean);
+        allAudio.forEach(audio => {
+            audio.volume = 0;
+            const p = audio.play();
+            if (p !== undefined) {
+                p.then(() => {
+                    audio.pause();
+                    audio.currentTime = 0;
+                    audio.volume = this.sfxVolume;
+                }).catch(() => {});
+            }
+        });
+        if (this.bgmAudio) {
+            this.bgmAudio.volume = 0;
+            const p = this.bgmAudio.play();
+            if (p !== undefined) {
+                p.then(() => {
+                    this.bgmAudio.pause();
+                    this.bgmAudio.currentTime = 0;
+                    this.bgmAudio.volume = this.bgmVolume;
+                }).catch(() => {});
+            }
+        }
     }
 }
 
@@ -5289,8 +5349,9 @@ window.__ach = {
     const audioManager = new AudioManager();
     await audioManager.preload();
 
-    // 浏览器自动播放策略：首次用户交互时解锁音频，按开关状态决定是否播放
+    // 浏览器自动播放策略：首次用户交互时批量解锁音频池 + 恢复 BGM
     document.addEventListener('click', () => {
+        audioManager.unlockAll();
         if (audioManager.bgmEnabled && audioManager.bgmAudio) {
             audioManager.startBGM();
         }
