@@ -2,6 +2,6 @@
   "name": "xie",
   "compatibility_date": "2026-07-16",
   "assets": {
-    "directory": "./"
+    "directory": "./www"
   }
 }

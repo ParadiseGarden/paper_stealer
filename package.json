@@ -1,0 +1,25 @@
+{
+  "name": "paper_stealing",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ParadiseGarden/paper_stealer.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/ParadiseGarden/paper_stealer/issues"
+  },
+  "homepage": "https://github.com/ParadiseGarden/paper_stealer#readme",
+  "dependencies": {
+    "@capacitor/cli": "^8.4.2",
+    "@capacitor/core": "^8.4.2"
+  }
+}
